@@ -121,3 +121,18 @@ def calculate_graph_stats_for_field(field):
               }
 
     return output
+
+def project_graph(field):
+    # project field network to gds library
+    with driver.session() as session :
+        session.run(f'''
+        CALL gds.graph.project.cypher(
+            '{field}',
+            'MATCH (a:Author {{field: "{field}"}}) RETURN id(a) AS id',
+            'MATCH (n)-[r:COAUTHOR]->(m) RETURN id(n) AS source, id(m) AS target',
+            {{validateRelationships:False}})
+        YIELD graphName AS graph, nodeQuery, nodeCount AS nodes, relationshipQuery, relationshipCount AS rels''')
+
+    num_nodes = result.single()['nodes']
+
+    return num_nodes

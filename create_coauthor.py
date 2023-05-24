@@ -3,6 +3,11 @@ import numpy as np
 from itertools import combinations
 from collections import defaultdict
 
+
+
+
+
+
 # get author ids in pandas series format
 def get_author_id(series):
     # remove comma from names
@@ -24,6 +29,7 @@ def get_author_id(series):
     return author_id
 
 
+# Create coauthor matrix
 def get_coauthor_matrix(author_series):
 
     # get paper : authors list
