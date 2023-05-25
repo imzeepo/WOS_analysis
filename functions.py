@@ -1,6 +1,8 @@
-import pandas as pd
 from neo4j import GraphDatabase
-
+import pandas as pd
+from itertools import combinations
+from collections import defaultdict
+import os
 
 uri ='bolt://localhost:7687'
 user = 'neo4j'
@@ -8,6 +10,47 @@ password = '09150915'
 
 driver = GraphDatabase.driver(uri, auth=(user,password))
 
+
+# get author ids in pandas series format
+def get_author_id(series):
+    # remove comma from names
+    authors = series.str.replace(',','')
+
+    # split authors
+    authors = authors.str.split(pat=';')
+
+    # for author in authors:
+    authors.apply(lambda x : [str(x[i]) for i in range(len(x))] if isinstance(x,str) else x)
+
+    # delete first item in each list
+    authors = authors.apply(lambda x: [x[i].split('/') for i in range(len(x)) ] if isinstance(x,list) else x)
+    authors = authors.apply(lambda x : [x[i][1:] for i in range(len(x))] if isinstance(x,list) else x)
+
+    # authors = authors.apply(lambda x : [x[i] for i in range(len(x)) if i % 2 != 0])
+    author_id = authors.apply(lambda x : [i for elem in x for i  in elem] if isinstance(x, list) else x)
+
+    return author_id
+
+
+# Create coauthor matrix
+def get_coauthor_matrix(author_series):
+
+    # get paper : authors list
+    author_ids = get_author_id(author_series)
+
+    coauthor_matrix = defaultdict(lambda: defaultdict(int))
+
+    for _, group in author_ids.items():
+        # create a list of author combinations for this article
+        if isinstance(group, list):
+            author_pairs = combinations(group, 2)
+            # update the co-author matrix for each author pair
+            for pair in author_pairs:
+                coauthor_matrix[pair[0]][pair[1]] += 1
+                coauthor_matrix[pair[1]][pair[0]] += 1
+
+
+    return coauthor_matrix
 
 # create coauthor graph from
 def create_coauthor_graph(coauthor_dict, field):
@@ -122,10 +165,11 @@ def calculate_graph_stats_for_field(field):
 
     return output
 
+# project graph to neo4j gds
 def project_graph(field):
     # project field network to gds library
-    with driver.session() as session :
-        session.run(f'''
+    with driver.session() as session:
+        result = session.run(f'''
         CALL gds.graph.project.cypher(
             '{field}',
             'MATCH (a:Author {{field: "{field}"}}) RETURN id(a) AS id',
@@ -136,3 +180,65 @@ def project_graph(field):
     num_nodes = result.single()['nodes']
 
     return num_nodes
+
+
+# Get degree centrality distribution data for projection in graph
+def get_degree_distribution(field):
+    with driver.session() as session:
+        result = session.run(f'''
+        CALL gds.degree.stream('{field}',
+        {{orientation: 'UNDIRECTED'}})
+        YIELD nodeId, score
+        RETURN score AS degreeCentrality
+        ORDER BY degreeCentrality;''')
+
+    return result.single()['score']
+
+def main():
+    input_dir = '/Users/jiyounglim/Documents/study/공종설 네트워크 분석/files_analyze'
+    stats_list = []
+
+    for file_name in os.listdir(input_dir):
+        if file_name.endswith('.csv'):
+            file_path = os.path.join(input_dir, file_name)
+
+            # Read the file into a DataFrame
+            df = pd.read_csv(file_path, low_memory=False)
+
+            field = file_name.split('.')[0]
+
+            # Perform operations on the DataFrame
+            coauthor = get_coauthor_matrix(df['Researcher Ids'])
+            create_coauthor_graph(coauthor, f'{field}')
+            stats = calculate_graph_stats_for_field(f'{field}')
+
+            # Add mainCategory and subCategory to the stats dictionary
+
+            # Add the stats to the stats_list
+            stats_list.append(stats)
+
+    # Create a DataFrame from the stats_list
+    stats_df = pd.DataFrame(stats_list)
+
+    # Save file to output path
+    output_dir = '/Users/jiyounglim/Documents/study/공종설 네트워크 분석/output'
+    base_filename = 'output.xlsx'
+
+    # Check if the base filename already exists in the folder
+    if os.path.isfile(os.path.join(output_dir, base_filename)):
+        # Increment the filename until a unique name is found
+        index = 1
+        while True:
+            new_filename = f"output-{index}.xlsx"
+            if not os.path.isfile(os.path.join(output_dir, new_filename)):
+                break
+            index += 1
+    else:
+        new_filename = base_filename
+
+    # Save the output with the new filename
+    # Replace this line with your actual code to save the output as 'new_filename'
+    result = f"Saving the output as '{new_filename}'..."
+    stats_df.to_excel(f'/Users/jiyounglim/Documents/study/공종설 네트워크 분석/output/{new_filename}.xlsx')
+
+    return result
