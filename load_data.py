@@ -20,7 +20,6 @@ def concat_df(field, length):
 
 def export_to_csv(output_dir, field_dict):
     for field, length in field_dict.items():
-        df_name = f'df_{field}'  # Generate the DataFrame name
         df = concat_df(field, length)
         # Export DataFrame to CSV
         file_name = f'{field}.csv'  # Generate the file name

@@ -152,6 +152,15 @@ def calculate_graph_stats_for_field(field):
 
         num_authors_in_main_component = result.single()['num_authors']
 
+    # get clustering coefficient
+    with driver.session() as session :
+        result = session.run(f'''
+        CALL gds.louvain.stats('{field}')
+        YIELD  modularity''')
+
+        average_clustering_coefficient = result.single()['modularity']
+
+    percentage_author_in_main_component = (num_authors_in_main_component/community_count)*100
 
     output = {'field' : field,
               'num_authors' : num_authors,
@@ -160,7 +169,9 @@ def calculate_graph_stats_for_field(field):
               'degree_centrality_max' : max_centrality,
               'degree_centrality_mean' : mean_centrality,
               'num_community' : community_count,
-              'num_authors_in_main_component': num_authors_in_main_component
+              'num_authors_in_main_component': num_authors_in_main_component,
+              'percentage_author_in_main_component': percentage_author_in_main_component,
+              'average_clustering_coefficient' : average_clustering_coefficient
               }
 
     return output
@@ -169,15 +180,13 @@ def calculate_graph_stats_for_field(field):
 def project_graph(field):
     # project field network to gds library
     with driver.session() as session:
-        result = session.run(f'''
-        CALL gds.graph.project.cypher(
-            '{field}',
-            'MATCH (a:Author {{field: "{field}"}}) RETURN id(a) AS id',
-            'MATCH (n)-[r:COAUTHOR]->(m) RETURN id(n) AS source, id(m) AS target',
-            {{validateRelationships:False}})
+        result = session.run(f'''CALL gds.graph.project.cypher('{field}',
+        'MATCH (a:Author {{field: "{field}"}}) RETURN id(a) AS id',
+        'MATCH (n)-[r:COAUTHOR]->(m) RETURN id(n) AS source, id(m) AS target',
+        {{validateRelationships:False}})
         YIELD graphName AS graph, nodeQuery, nodeCount AS nodes, relationshipQuery, relationshipCount AS rels''')
 
-    num_nodes = result.single()['nodes']
+        num_nodes = result.single()['nodes']
 
     return num_nodes
 
@@ -191,38 +200,81 @@ def get_degree_distribution(field):
         YIELD nodeId, score
         RETURN score AS degreeCentrality
         ORDER BY degreeCentrality;''')
+        temp = result.fetch(100000)
+    degree_centrality_values = [record.get('degreeCentrality') for record in temp]
 
-    return result.single()['score']
+    return degree_centrality_values
+
+def get_eigen_distribution(field):
+    with driver.session() as session:
+        result = session.run(f'''
+        CALL gds.eigenvector.stream("{field}") 
+        YIELD nodeId, score
+        RETURN score AS eigenCentrality
+        ORDER BY eigenCentrality;''')
+
+        temp = result.fetch(100000)
+    eigen_centrality_values = [record.get('eigenCentrality') for record in temp]
+    return eigen_centrality_values
+
+def get_betweenness_distribution(field):
+    with driver.session() as session:
+        result = session.run(f'''
+        CALL gds.betweenness.stream('{field}')
+        YIELD nodeId, score
+        RETURN score AS betweennessCentrality
+        ORDER BY betweennessCentrality;''')
+
+        temp = result.fetch(100000)
+    betweenness_centrality_values = [record.get('betweennessCentrality') for record in temp]
+    return betweenness_centrality_values
+
+
+
+
+
+
 
 def main():
-    input_dir = '/Users/jiyounglim/Documents/study/공종설 네트워크 분석/files_analyze'
+    input_dir = '/Users/jiyounglim/Documents/study/공종설 네트워크 분석/files'
     stats_list = []
+    file_groups = {}
 
+    # Group files based on the prefix before "-"
     for file_name in os.listdir(input_dir):
-        if file_name.endswith('.csv'):
+        if file_name.endswith('.xls'):
+            prefix = file_name.split('-')[0]
+            if prefix not in file_groups:
+                file_groups[prefix] = []
+            file_groups[prefix].append(file_name)
+
+    # Process each file group
+    for prefix, files in file_groups.items():
+        merged_df = None
+        field = prefix
+
+        # Concatenate files with the same prefix
+        for file_name in files:
             file_path = os.path.join(input_dir, file_name)
+            df = pd.read_excel(file_path)
+            if merged_df is None:
+                merged_df = df
+            else:
+                merged_df = pd.concat([merged_df, df])
 
-            # Read the file into a DataFrame
-            df = pd.read_csv(file_path, low_memory=False)
+        # Perform operations on the DataFrame
+        coauthor = get_coauthor_matrix(merged_df['Researcher Ids'])
+        create_coauthor_graph(coauthor, f'{field}')
+        stats = calculate_graph_stats_for_field(f'{field}')
 
-            field = file_name.split('.')[0]
-
-            # Perform operations on the DataFrame
-            coauthor = get_coauthor_matrix(df['Researcher Ids'])
-            create_coauthor_graph(coauthor, f'{field}')
-            stats = calculate_graph_stats_for_field(f'{field}')
-
-            # Add mainCategory and subCategory to the stats dictionary
-
-            # Add the stats to the stats_list
-            stats_list.append(stats)
-
+        # Add the stats to the stats_list
+        stats_list.append(stats)
     # Create a DataFrame from the stats_list
     stats_df = pd.DataFrame(stats_list)
 
     # Save file to output path
     output_dir = '/Users/jiyounglim/Documents/study/공종설 네트워크 분석/output'
-    base_filename = 'output.xlsx'
+    base_filename = 'output'
 
     # Check if the base filename already exists in the folder
     if os.path.isfile(os.path.join(output_dir, base_filename)):
@@ -242,3 +294,6 @@ def main():
     stats_df.to_excel(f'/Users/jiyounglim/Documents/study/공종설 네트워크 분석/output/{new_filename}.xlsx')
 
     return result
+
+
+main()
